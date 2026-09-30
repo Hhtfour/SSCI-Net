@@ -1,7 +1,4 @@
 """Interaction modules for SSCI-Net.
-
-Names follow the manuscript terminology. The active computations are kept from
-``dd(2).py``. Unused alternative fusion designs have been removed.
 """
 
 import math
@@ -184,7 +181,6 @@ class SCTMM(nn.Module):
         if next(self.parameters()).device != device:
             self.to(device)
 
-        # The order is SAR, AMSR2, auxiliary, matching the SSCI-Net forward path.
         modal_tokens = [sar_tokens, amsr2_tokens, auxiliary_tokens]
         projected_modals = [
             proj(modal)
@@ -320,12 +316,6 @@ class AdaptiveModalFusion(nn.Module):
 
 class DCSFM(nn.Module):
     """Dynamic Cross-Modal Supplement Fusion Module (DCSFM).
-
-    Note: legacy internal attribute names are intentionally retained so that
-    existing checkpoints keep the same parameter keys. In the original code,
-    the first DCSFM argument is the SAR branch even though several registered
-    attribute names contain ``amsr``. Local variable names below reflect the
-    actual branch semantics without changing the computation or state-dict keys.
     """
 
     def __init__(self, in_channels, reduction=8):
@@ -354,8 +344,6 @@ class DCSFM(nn.Module):
         self.amf = AdaptiveModalFusion(in_channels, reduction)
 
     def forward(self, sar_feature, amsr2_feature, auxiliary_feature):
-        # Stage 1: channel estimation and soft high/low decomposition.
-        # These module accesses preserve the original learned branch ordering.
         alpha_s = self.cwe_amsr(sar_feature)
         alpha_r = self.cwe_sar(amsr2_feature)
         alpha_a = self.cwe_aul(auxiliary_feature)
@@ -401,8 +389,3 @@ class DCSFM(nn.Module):
         # Stage 4: adaptive modality fusion.
         fused_feat = self.amf(sar_refined, amsr2_refined, auxiliary_refined)
         return fused_feat
-
-
-# Backward-compatible class names used by the original experiment scripts.
-CrossModalFusion_new = SCTMM
-MultiModalDynamicFusion = DCSFM
