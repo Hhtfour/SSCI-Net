@@ -1,8 +1,4 @@
 """SSCI-Net model implementation.
-
-Paper-facing method/module names are used where possible. Registered legacy
-submodule names are retained when changing them would break existing checkpoint
-state-dict keys. Unused alternative top-level experiment utilities were removed.
 """
 
 import torch
@@ -217,9 +213,9 @@ class SSCINet(ResNet):
         self.classifier_FLOE = TwoLayerConv2d(in_channels=input_nc*3, out_channels=8)
 
         self.mac = MCM1(input_nc//4*3, input_nc//4*3)
-        self.vis_merge_proj = nn.Conv2d(input_nc*2, input_nc*4, 1)  # 合并视觉特征+通道投影（8+16→64）
-        self.sem_proj = nn.Linear(input_nc, input_nc*4)  # 语义Token维度投影（16→64）
-        # 多头交叉注意力（双向交互核心，head数=8，维度=64，轻量高效）
+        self.vis_merge_proj = nn.Conv2d(input_nc*2, input_nc*4, 1)  
+        self.sem_proj = nn.Linear(input_nc, input_nc*4)  
+
         self.cross_attn = nn.MultiheadAttention(embed_dim=input_nc*4, num_heads=8, batch_first=True, dropout=0.1)
 
         self._upsample_block = nn.Sequential(
@@ -230,12 +226,12 @@ class SSCINet(ResNet):
         self.up1 = nn.Sequential(
             nn.ConvTranspose2d(in_channels=input_nc*6, out_channels=input_nc*3, kernel_size=2, stride=2, bias=False),
             nn.BatchNorm2d(input_nc*3),
-            nn.GELU()  # 非线性保留信息
+            nn.GELU() 
         )
         self.up2 = nn.Sequential(
             nn.ConvTranspose2d(in_channels=input_nc*6, out_channels=input_nc*3, kernel_size=2, stride=2, bias=False),
             nn.BatchNorm2d(input_nc*3),
-            nn.GELU()  # 非线性保留信息
+            nn.GELU()  
         )
 
 
@@ -245,21 +241,21 @@ class SSCINet(ResNet):
             nn.ReLU(inplace=True)
         )
         self.channel_compress = nn.Sequential(
-            nn.Conv2d(input_nc*4, input_nc, 1),  # 核心压缩
-            nn.BatchNorm2d(input_nc),  # 归一化稳定
-            nn.GELU()  # 非线性保留信息
+            nn.Conv2d(input_nc*4, input_nc, 1),  
+            nn.BatchNorm2d(input_nc),
+            nn.GELU() 
         )
         self.conv_de = nn.Conv2d(input_nc*3, input_nc*3//2, kernel_size=1,
                                  padding=0, bias=False)
 
         self.adaptive_fusion = nn.Sequential(
-            # 1×1 卷积：压缩通道 + 统一特征空间（24→16，减少计算）
+         
             nn.Conv2d(input_nc*3, input_nc*3//2, kernel_size=1, padding=0, bias=False),
             nn.BatchNorm2d(input_nc*3//2),
-            nn.GELU(),  # 非线性激活，保留细节
-            # 生成自适应权重（16→1，单通道权重图）
+            nn.GELU(),  
+           
             nn.Conv2d(input_nc*3//2, 1, kernel_size=1, padding=0, bias=False),
-            nn.Sigmoid()  # 权重归一化到 [0,1]
+            nn.Sigmoid() 
         )
         self.residual_proj = nn.Linear(input_nc*3,  input_nc*3//2, bias=False)
         self.final=Final(dim, dim)
@@ -319,74 +315,57 @@ class SSCINet(ResNet):
         return x
 
     def semantic_guided_fusion(self, x, x_resnet, global_tok):
-        """语义引导的残差融合"""
         b, c, h, w = x.shape
-
-        # 1. 从global_tok生成残差修正项
-        # 将global_tok转换为与特征图通道数匹配
+      
         residual_guide = self.residual_proj(global_tok)
         residual_guide = residual_guide.transpose(2, 1)  # (1, 4, 48) -> (1, 24, 4)
         residual_guide = residual_guide.mean(dim=2, keepdim=True)  # (1, 24, 1)
         residual_guide = residual_guide.unsqueeze(-1)  # (1, 24, 1, 1)
-
-        # 2. 基础融合（原方案）
         base_weight = self.adaptive_fusion(x)
         x_base = base_weight * x + (1 - base_weight) * x_resnet
 
-        # 3. 语义引导的残差修正
-        # 计算x和x_resnet的差异，用global_tok指导修正
-        diff = x - x_resnet  # 特征差异
-        residual_mask = torch.sigmoid(residual_guide)  # 语义指导的修正强度
+        diff = x - x_resnet 
+        residual_mask = torch.sigmoid(residual_guide)
 
-        # 4. 最终融合：基础融合 + 语义指导的残差修正
+  
         x_fused = x_base + residual_mask * diff
 
         return x_fused
 
     def _scim(self, fea, ori_fea, token):
-        # 输入：fea(1,16,64,64)、ori_fea(1,8,64,64)、token(1,4,16)
+     
         B,C, H, W = fea.shape
 
-        #######################################
-        # 步骤1：极简预处理（维度统一+形态对齐）
-        #######################################
-        # 1.1 视觉特征：合并→投影→展平为序列（适配注意力）
-        vis_feat = torch.cat([fea, ori_fea], dim=1)  # (1,24,64,64) → 合并两个视觉特征
-        vis_feat = self.vis_merge_proj(vis_feat)  # (1,64,64,64) → 投影到64维（与语义统一）
-        vis_seq = vis_feat.flatten(2).transpose(1, 2)  # (1, 64*64=4096, 64) → 2D→序列（B, Lv, D）
 
-        # 1.2 语义Token：维度投影（保持序列形态）
-        sem_seq = self.sem_proj(token)  # (1,4,16) → (1,4,64)（B, Ls=4, D）
+    
+        vis_feat = torch.cat([fea, ori_fea], dim=1) 
+        vis_feat = self.vis_merge_proj(vis_feat) 
+        vis_seq = vis_feat.flatten(2).transpose(1, 2) 
 
-        #######################################
-        # 步骤2：双向注意力交互（核心高级逻辑）
-        #######################################
-        # 语义引导视觉：用语义Token作为Key/Value，视觉序列作为Query → 视觉聚焦语义相关区域
-        vis_enhanced, _ = self.cross_attn(query=vis_seq, key=sem_seq, value=sem_seq)  # (1,4096,64)
-        # 视觉增强语义：用增强后的视觉作为Key/Value，语义Token作为Query → 语义吸收视觉细节
-        sem_enhanced, _ = self.cross_attn(query=sem_seq, key=vis_enhanced, value=vis_enhanced)  # (1,4,64)
+      
+        sem_seq = self.sem_proj(token) 
 
-        #######################################
-        # 步骤3：自适应加权融合（简便且精准）
-        #######################################
-        # 语义全局池化→生成像素级注意力权重（语义引导视觉权重分配）
-        sem_weight = sem_enhanced.mean(dim=1).unsqueeze(1).unsqueeze(1)  # (1,1,1,64) → 全局语义特征
-        sem_weight = F.softmax(sem_weight, dim=-1)  # 归一化权重（0-1）
+      
+        vis_enhanced, _ = self.cross_attn(query=vis_seq, key=sem_seq, value=sem_seq)  
+     
+        sem_enhanced, _ = self.cross_attn(query=sem_seq, key=vis_enhanced, value=vis_enhanced)
 
-        # 视觉特征重构+语义加权（逐通道自适应融合）
-        vis_enhanced = vis_enhanced.transpose(1, 2).reshape(B, C*4, H, W)  # (1,4096,64) → (1,64,64,64)
-        fused_feat = vis_enhanced * sem_weight.transpose(3, 1)  # (1,64,64,64) → 语义加权视觉特征
+   
+        sem_weight = sem_enhanced.mean(dim=1).unsqueeze(1).unsqueeze(1) 
+        sem_weight = F.softmax(sem_weight, dim=-1) 
+
+ 
+        vis_enhanced = vis_enhanced.transpose(1, 2).reshape(B, C*4, H, W)  
+        fused_feat = vis_enhanced * sem_weight.transpose(3, 1) 
         fused_feat_8ch = self.channel_compress(fused_feat)
-        return fused_feat_8ch  # 输出融合后特征：(1,64,64,64)
+        return fused_feat_8ch  
 
     @property
     def sctmm(self):
-        """Paper-facing alias; registered name is kept for checkpoint compatibility."""
         return self.token_fusion
 
     @property
     def dcsfm(self):
-        """Paper-facing alias; registered name is kept for checkpoint compatibility."""
         return self.f_fusion
 
     def forward(self, x1):
@@ -438,19 +417,16 @@ class SSCINet(ResNet):
         # Parallel SCTMM semantic branch.
         t_cat = torch.cat([t_s, t_r, t_a], dim=2)
         t_g = self.sctmm(t_s, t_r, t_a) + t_cat
-
         # ------------------------------------------------------------------
         # 3. Transformer Fusion
         # ------------------------------------------------------------------
         a_spa = self.adaptive_fusion(f_g)
         f_spa = a_spa * f_g + (1 - a_spa) * x_sp_cat
         f_tf = self._transformer_fusion(f_spa, t_g)
-
         if not self.if_upsample_2x:
             f_tf = self.upsamplex2(f_tf)
         f_tf = self.up1(torch.cat((f_tf, f_spa), dim=1))
         f_out = self.up2(torch.cat((f_tf, self.max_i(f_spa)), dim=1))
-
         # ------------------------------------------------------------------
         # 4. Multi-Task Prediction
         # ------------------------------------------------------------------
@@ -458,7 +434,3 @@ class SSCINet(ResNet):
         sod = self.classifier_SOD(f_out)
         floe = self.classifier_FLOE(f_out)
         return {'SIC': sic, 'SOD': sod, 'FLOE': floe}
-# #
-# net = SSCINet(input_nc=16, output_nc=2, token_len=10, resnet_stages_num=4,
-#                             with_pos='learned',pre=True)
-
